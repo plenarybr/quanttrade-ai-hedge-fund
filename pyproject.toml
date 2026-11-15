@@ -35,9 +35,13 @@ pyyaml = "^6.0.3"
 textual = "^8.2.8"
 # Pay Financial Datasets per call with x402 instead of an API key: `pip install aihf[x402]`.
 x402 = {version = "^2.26", extras = ["evm", "requests"], optional = true}
+# The Discord bot that answers /status, /halt and friends in a channel.
+# Posting to a webhook needs none of this — only `requests`, already here.
+"discord.py" = {version = "^2.4", optional = true}
 
 [tool.poetry.extras]
 x402 = ["x402"]
+discord = ["discord.py"]
 
 [tool.poetry.scripts]
 aihf = "hedge_fund.run:main"

@@ -27,13 +27,23 @@ import requests
 
 from hedge_fund.llm import contract
 from hedge_fund.llm.registry import (
+    CLAUDE_CODE,
     env_var_for,
     is_supported,
+    needs_key,
     provider_for,
     SUPPORTED_PROVIDERS,
 )
 
-DEFAULT_MODEL = "claude-opus-5-5"
+# This fork reasons on the account's own Claude by default: the local CLI,
+# signed in with `claude login` (or CLAUDE_CODE_OAUTH_TOKEN on a server), so
+# a run costs a subscription rather than API tokens. `--model claude-opus-5-5`
+# (or any other registry id) still routes to the metered API.
+DEFAULT_MODEL = "claude-code:opus"
+
+# The CLI pays a process start, a system-prompt render, and then the model's
+# own thinking. A 60s API timeout is simply the wrong unit for it.
+CLI_MIN_TIMEOUT = 300.0
 
 # Called with each piece of text as it arrives. None means don't stream.
 TokenListener = Callable[[str], None] | None
@@ -246,6 +256,13 @@ def make_llm(
             f"Supported: {', '.join(sorted(SUPPORTED_PROVIDERS))}."
         )
 
+    if provider == CLAUDE_CODE:
+        # No key: the CLI carries the account's session. Imported here so the
+        # module stays importable on a machine with no CLI at all.
+        from hedge_fund.llm.claude_code import ClaudeCodeLLM
+        return ClaudeCodeLLM(model=model, timeout=max(timeout, CLI_MIN_TIMEOUT),
+                             on_token=on_token)
+
     api_key = _require_key(provider)
 
     if provider == "TypeSafe":
@@ -319,6 +336,8 @@ def _flatten(content, sep: str = "\n") -> str:
 
 def _require_key(provider: str) -> str:
     """The provider's API key, or a failure that names the variable to set."""
+    if not needs_key(provider):  # pragma: no cover - make_llm returns before this
+        raise ValueError(f"{provider} is reached without a key")
     env_var = env_var_for(provider)
     # Kimi accepts either name; v1 reads MOONSHOT_API_KEY first.
     key = (os.getenv("MOONSHOT_API_KEY") if provider == "Kimi" else None)

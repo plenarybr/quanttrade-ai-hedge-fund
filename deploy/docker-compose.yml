@@ -1,0 +1,40 @@
+# Two processes, one image: the fund's runner and (optionally) the bot.
+#
+#   cp ../.env.example aihf.env   # then edit: token, webhook, data key
+#   docker compose up -d
+#
+# ./hedge-fund-data is ~/.hedge-fund inside the containers — ledgers, mandates
+# and the prompt cache live there. Back it up: a paper fund's NAV is a track
+# record and does not rebuild.
+
+services:
+  runner:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: aihf:local
+    env_file: aihf.env
+    volumes:
+      - ./hedge-fund-data:/home/aihf/.hedge-fund
+      - claude-state:/home/aihf/.claude
+    # Change "alpha" to your fund's name. Create it once with:
+    #   docker compose run --rm runner paper create alpha --mandate … --universe …
+    command: ["paper", "run", "alpha"]
+    restart: unless-stopped
+    stop_grace_period: 10m      # it finishes the session in flight first
+
+  bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: aihf:local
+    env_file: aihf.env
+    volumes:
+      - ./hedge-fund-data:/home/aihf/.hedge-fund
+      - claude-state:/home/aihf/.claude
+    command: ["discord", "bot"]
+    restart: unless-stopped
+    depends_on: [runner]
+
+volumes:
+  claude-state:

@@ -1,0 +1,53 @@
+# One paper fund, kept running: `systemctl enable --now aihf-paper@alpha`
+# advances the fund named "alpha" whenever a session is due and posts every
+# one of them to Discord.
+#
+#   cp deploy/aihf-paper@.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now aihf-paper@<fund>
+#
+# The fund must already exist (`aihf paper create <fund> --mandate … --universe …`).
+
+[Unit]
+Description=aihf paper fund %i
+Documentation=https://github.com/plenarybr/quanttrade-ai-hedge-fund
+After=network-online.target
+Wants=network-online.target
+# A halted fund exits non-zero on purpose and must not be restarted into the
+# same wall: five failures in ten minutes and systemd leaves it alone.
+# (These two live in [Unit] on systemd >= 229.)
+StartLimitBurst=5
+StartLimitIntervalSec=600
+
+[Service]
+Type=simple
+User=aihf
+Group=aihf
+WorkingDirectory=/opt/aihf
+
+# KEY=value per line, no `export`, quotes around anything with a space.
+# Holds CLAUDE_CODE_OAUTH_TOKEN, DISCORD_WEBHOOK_URL and the data API key.
+EnvironmentFile=/etc/aihf/aihf.env
+Environment=HOME=/home/aihf
+Environment=PATH=/home/aihf/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/aihf/.venv/bin/aihf paper run %i
+
+# SIGTERM is what the runner wants: it stops after the session in flight.
+# Give it room to finish one — an LLM cycle over a universe is not instant.
+KillSignal=SIGTERM
+TimeoutStopSec=600
+
+Restart=on-failure
+RestartSec=30
+
+# /usr and /boot read-only, a private /tmp, no new privileges. The home
+# directory stays writable on purpose: the ledger lives in ~/.hedge-fund and
+# the Claude CLI keeps its own state under ~/.claude — sandboxing those with
+# ReadWritePaths is a good way to get an obscure startup failure instead.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+# The bot that answers /status, /scorecard, /halt, /resume, /run and /stop.
+# Optional: a fund reports through its webhook without any of this.
+#
+#   pip install -e '.[discord]'
+#   cp deploy/aihf-discord-bot.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now aihf-discord-bot
+
+[Unit]
+Description=aihf Discord bot
+Documentation=https://github.com/plenarybr/quanttrade-ai-hedge-fund
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aihf
+Group=aihf
+WorkingDirectory=/opt/aihf
+
+# Needs DISCORD_BOT_TOKEN, and DISCORD_ALLOWED_USER_IDS for /halt and friends
+# to be usable at all.
+EnvironmentFile=/etc/aihf/aihf.env
+Environment=HOME=/home/aihf
+Environment=PATH=/home/aihf/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/aihf/.venv/bin/aihf discord bot
+
+Restart=always
+RestartSec=15
+
+# /run and /stop spawn and signal runners, so the bot touches the same state
+# the runner does — see the note in aihf-paper@.service.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -15,10 +15,17 @@ from textual.widgets.option_list import Option
 
 from hedge_fund import paths
 from hedge_fund.data.client import API_KEY_ENV, has_data_credential, WALLET_KEY_ENV
-from hedge_fund.llm import is_supported, load_api_models, provider_for
+from hedge_fund.llm import (
+    CLAUDE_CODE,
+    claude_cli_available,
+    DEFAULT_MODEL,
+    is_supported,
+    load_api_models,
+    provider_for,
+)
 from hedge_fund.tui.keys import masked, missing_key, PROVIDER_ENV_VARS, save_credential
 from hedge_fund.tui.palette import BRIGHT, GREEN, MUTED, TEXT
-from hedge_fund.tui.shared import DEFAULT_MODEL_LABEL
+from hedge_fund.tui.shared import DEFAULT_MODEL_LABEL  # noqa: F401  (re-export)
 
 
 class HomeScreen(Screen):
@@ -63,10 +70,8 @@ class HomeScreen(Screen):
         models = load_api_models()
         preset = os.environ.get("HEDGE_FUND_LLM_MODEL")
         known = {mid for _, mid, _ in models}
-        self._model_id = preset if preset in known else next(
-            (mid for label, mid, _ in models if label == DEFAULT_MODEL_LABEL),
-            models[0][1],
-        )
+        self._model_id = preset if preset in known else (
+            DEFAULT_MODEL if DEFAULT_MODEL in known else models[0][1])
         os.environ["HEDGE_FUND_LLM_MODEL"] = self._model_id
         self._show_model()
         self.query_one("#home-menu", OptionList).focus()
@@ -319,6 +324,15 @@ def demand_run_keys(app, resume) -> bool:
                         lambda saved: resume() if saved else None)
         return False
     provider = provider_for(os.environ.get("HEDGE_FUND_LLM_MODEL", ""))
+    if provider == CLAUDE_CODE and not claude_cli_available():
+        # The account's own Claude needs no key — it needs the CLI. Saying so
+        # here is the whole point of this gate: a run that dies on a missing
+        # credential has already spent minutes warming the roster.
+        app.notify("No `claude` CLI on this machine. Install it from "
+                   "https://claude.com/claude-code, or press m and pick a "
+                   "provider with an API key.",
+                   title="Claude CLI missing", severity="error", timeout=12)
+        return False
     env_var = missing_key(provider) if provider else None
     if env_var is None:
         return True

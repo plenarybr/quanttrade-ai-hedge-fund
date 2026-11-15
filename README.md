@@ -21,6 +21,21 @@ This project is for **educational and research purposes only**.
 
 By using this software, you agree to use it solely for learning purposes.
 
+## Neste fork (Plenary)
+
+Duas mudanças em relação ao upstream:
+
+- **Os agentes raciocinam no Claude da sua conta**, pelo CLI `claude` instalado na máquina — assinatura, não API key. O modelo padrão é `claude-code:opus`; basta `claude login` (no servidor, um token de `claude setup-token`). `--model claude-opus-5-5` e os outros ids do registry continuam usando a API paga.
+- **O fundo fala no Discord.** Cada sessão de paper trading, cada halt/gap/falha e cada backtest terminado viram mensagem no canal, por webhook (`DISCORD_WEBHOOK_URL`). E o canal responde: `/status`, `/scorecard`, `/halt`, `/resume`, `/run`, `/stop` (`aihf discord bot`).
+
+```bash
+claude login                 # uma vez
+aihf discord test            # confere o webhook
+aihf paper run alpha         # avança o fundo e posta cada sessão
+```
+
+Passo a passo completo, incluindo systemd e Docker no servidor: **[docs/claude-e-discord.md](docs/claude-e-discord.md)**. Arquivos de deploy em [`deploy/`](deploy).
+
 ## How to Install
 
 ```bash
@@ -40,7 +55,7 @@ aihf
 The app asks for keys the first time it needs them and saves them to `~/.hedge-fund/.env` — nothing to configure up front. It needs:
 
 - A [Financial Datasets](https://financialdatasets.ai) API key, for prices, fundamentals, and earnings. Or, instead of a key, the private key of a Base wallet holding USDC: every call then pays for itself with [x402](https://docs.financialdatasets.ai/x402) (`pip install 'aihf[x402]'`; last 365 days of data, non-professional use).
-- One model API key for the investor agents. Supported providers: Anthropic, OpenAI, DeepSeek, Google, xAI, Kimi, TypeSafe (Jev).
+- A model for the investor agents. By default this fork uses the `claude` CLI on your own account — no key at all, see *Neste fork* above. A metered provider instead needs its key: Anthropic, OpenAI, DeepSeek, Google, xAI, Kimi, TypeSafe (Jev).
 
 Keys exported in your shell always win over the saved file.
 

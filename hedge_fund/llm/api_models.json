@@ -1,5 +1,20 @@
 [
   {
+    "display_name": "Claude Opus (your account)",
+    "model_name": "claude-code:opus",
+    "provider": "Claude Code"
+  },
+  {
+    "display_name": "Claude Sonnet (your account)",
+    "model_name": "claude-code:sonnet",
+    "provider": "Claude Code"
+  },
+  {
+    "display_name": "Claude Haiku (your account)",
+    "model_name": "claude-code:haiku",
+    "provider": "Claude Code"
+  },
+  {
     "display_name": "Opus 5.5",
     "model_name": "claude-opus-5-5",
     "provider": "Anthropic"

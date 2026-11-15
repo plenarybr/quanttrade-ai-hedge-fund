@@ -44,6 +44,19 @@ Usage::
         Grade every analyst (hit rate, slugging, IC) and every strategy
         (P&L between executions) on the fund's ledger. JSON on stdout.
 
+    aihf discord test | bot
+        `test` posts one message to DISCORD_WEBHOOK_URL, so you find a bad
+        webhook now rather than at 4am. `bot` connects a bot to Discord and
+        answers /status, /scorecard, /halt, /resume, /run and /stop in the
+        channel; it needs DISCORD_BOT_TOKEN and `pip install 'aihf[discord]'`.
+
+Every session a paper fund advances, every halt, gap and failure, and every
+finished backtest is posted to Discord when DISCORD_WEBHOOK_URL is set
+(DISCORD_NOTIFY picks which of sessions/alerts/backtests; --no-discord
+silences one run). The agents reason on whichever model --model names: by
+default `claude-code:opus`, which is the Claude CLI signed in to your own
+account rather than a metered API key.
+
 A mandate is the desk — strategies, staff, risk, capital, cadence — and
 never names tickers; the universe is fixed when a fund is deployed (paper)
 or given per study (backtest).
@@ -65,6 +78,8 @@ from hedge_fund.data import CachedDataClient, CallMeter, FDClient
 from hedge_fund.data.bars import is_intraday
 from hedge_fund.data.sessions import completed_through
 from hedge_fund.fund import Fund, load_spec, normalize_universe
+from hedge_fund.notify import DiscordError, from_env as discord_from_env
+from hedge_fund.notify.discord import WEBHOOK_ENV
 from hedge_fund.paper import (
     deploy,
     is_running,
@@ -109,9 +124,11 @@ def main() -> None:
     try:
         if args.command == "backtest":
             _backtest(args, parser, console)
+        elif args.command == "discord":
+            _discord(args, console)
         else:
             _paper(args, parser, console)
-    except (FundHalted, NothingDue, LedgerError) as exc:
+    except (FundHalted, NothingDue, LedgerError, DiscordError) as exc:
         console.print(f"[red]{exc}[/]")
         sys.exit(1)
 
@@ -129,9 +146,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model",
-        help="LLM the investor agents reason with, e.g. claude-opus-5-5 "
-        "(default: HEDGE_FUND_LLM_MODEL env, else the built-in default); quant "
-        "models ignore it",
+        help="LLM the investor agents reason with. Default: claude-code:opus — "
+        "the local Claude CLI on your own account, no API key. Any registry id "
+        "(claude-opus-5-5, gpt-6-sol, …) uses that provider's metered API "
+        "instead; HEDGE_FUND_LLM_MODEL sets it for good. Quant models ignore it.",
+    )
+    parser.add_argument(
+        "--no-discord", action="store_true",
+        help="do not post this run to Discord, whatever the environment says",
     )
     commands = parser.add_subparsers(dest="command")
 
@@ -182,10 +204,32 @@ def _parser() -> argparse.ArgumentParser:
 
     resume = actions.add_parser("resume", help="clear the kill switch")
     resume.add_argument("name")
+
+    discord = commands.add_parser(
+        "discord", help="check the webhook, or run the bot that answers commands",
+        description="`test` posts one message to the configured webhook. `bot` stays "
+        "connected and answers /status, /scorecard, /halt, /resume, /run and /stop.",
+    )
+    discord_actions = discord.add_subparsers(dest="action", required=True)
+    discord_actions.add_parser("test", help="post one message to DISCORD_WEBHOOK_URL")
+    discord_actions.add_parser("bot", help="connect the bot and answer commands in the channel")
     return parser
 
 
 _UNIVERSE_HELP = "tickers to trade, comma or space separated, e.g. AAPL,MSFT,NVDA"
+
+
+def _notifier(args):
+    """The Discord notifier this run should use, or None.
+
+    None is the ordinary quiet case (no webhook configured, or --no-discord).
+    A webhook that is set and malformed raises DiscordError, which main()
+    turns into a red line and a non-zero exit — a fund told to report that
+    silently cannot is worse than one that refuses to start.
+    """
+    if getattr(args, "no_discord", False):
+        return None
+    return discord_from_env()
 
 
 def _universe(text: str, parser: argparse.ArgumentParser) -> list[str]:
@@ -253,6 +297,10 @@ def _backtest(args, parser: argparse.ArgumentParser, console: Console) -> None:
     console.print(strategy_table(card))
     console.print(f"[dim]saved to {saved}[/]")
 
+    notifier = _notifier(args)
+    if notifier is not None:
+        notifier.backtest(result, universe=universe, data_calls=meter.calls)
+
 
 # ---------------------------------------------------------------------------
 # paper
@@ -298,6 +346,9 @@ def _paper(args, parser: argparse.ArgumentParser, console: Console) -> None:
                           else tick(directory, fd, session=args.session))
         print(record.model_dump_json(indent=2))
         console.print(_tick_summary(deployed.name, record))
+        notifier = _notifier(args)
+        if notifier is not None:
+            notifier.session(deployed.name, record, capital=deployed.spec.capital)
         return
 
     if args.action == "run":
@@ -307,18 +358,39 @@ def _paper(args, parser: argparse.ArgumentParser, console: Console) -> None:
         console.print(f"[bold]{deployed.name}[/] running {cadence}  ·  "
                       f"{', '.join(deployed.universe)}  ·  Ctrl-C or `aihf paper stop {deployed.name}` to stop")
 
+        notifier = _notifier(args)
+        if notifier is not None:
+            console.print("[dim]posting every session and alert to Discord[/]")
+
         def _event(kind: str, fields: dict) -> None:
             detail = fields.get("reason") or (f"{fields.get('bars_skipped')} bars skipped" if "bars_skipped" in fields else "")
             console.print(f"[yellow]{kind}[/] {fields.get('from') or 'start'} → {fields.get('to')}  {detail}".rstrip())
+            if notifier is not None:
+                notifier.event(deployed.name, kind, fields)
+
+        def _record(record: SessionRecord) -> None:
+            console.print(_tick_summary(deployed.name, record))
+            if notifier is not None:
+                notifier.session(deployed.name, record, capital=spec.capital)
 
         with FDClient() as raw:
             try:
                 serve(directory, CachedDataClient(raw, live=spec.is_intraday),
-                      on_record=lambda record: console.print(_tick_summary(deployed.name, record)),
-                      on_event=_event)
+                      on_record=_record, on_event=_event)
             except RuntimeError as exc:  # already running
                 console.print(f"[red]{exc}[/]")
                 sys.exit(1)
+            except FundHalted as exc:
+                # The loop raises this on the kill switch, set here or by a
+                # failed session. It is the single most important thing a
+                # channel can be told, so it is posted before it propagates.
+                if notifier is not None:
+                    notifier.halted(deployed.name, str(exc))
+                raise
+            except Exception as exc:  # noqa: BLE001 - reported, then re-raised
+                if notifier is not None:
+                    notifier.failed(deployed.name, exc, context="the runner")
+                raise
         console.print(f"[dim]{deployed.name} stopped[/]")
         return
 
@@ -356,12 +428,47 @@ def _paper(args, parser: argparse.ArgumentParser, console: Console) -> None:
         return
 
     ledger = Ledger(directory)
+    notifier = _notifier(args)
     if args.action == "halt":
         ledger.halt(args.reason)
         console.print(f"[red]{args.name} halted:[/] {args.reason}")
+        if notifier is not None:
+            notifier.halted(args.name, args.reason)
     elif args.action == "resume":
         ledger.resume()
         console.print(f"[green]{args.name} resumed[/]")
+        if notifier is not None:
+            notifier.resumed(args.name)
+
+
+# ---------------------------------------------------------------------------
+# discord
+# ---------------------------------------------------------------------------
+
+def _discord(args, console: Console) -> None:
+    if args.action == "test":
+        notifier = discord_from_env()
+        if notifier is None:
+            console.print(f"[red]{WEBHOOK_ENV} is not set[/] — put your channel's webhook URL in "
+                          f"~/.hedge-fund/.env (Channel → Edit Channel → Integrations → Webhooks)")
+            sys.exit(1)
+        if notifier.ping():
+            console.print("[green]posted[/] — check the channel")
+        else:
+            console.print("[red]Discord did not accept the message[/] — the log above says why")
+            sys.exit(1)
+        return
+
+    from hedge_fund.notify.bot import BotUnavailable, serve as serve_bot
+
+    console.print("[bold]discord bot[/] connecting · Ctrl-C to stop")
+    try:
+        serve_bot()
+    except BotUnavailable as exc:
+        console.print(f"[red]{exc}[/]")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("[dim]bot stopped[/]")
 
 
 def _status_line(directory: Path) -> str:

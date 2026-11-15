@@ -96,7 +96,7 @@ can be backtested and combined — is a great first contribution:
 | Item | Status |
 |------|--------|
 | Scheduler / daemon — market-calendar cron, idempotent ticks, kill-switch | 🚧 (`aihf paper tick` is idempotent, never skips a session, and honours the kill switch — point any cron at it; the built-in calendar-aware daemon is next) |
-| Observability — per-cycle events, notifications, heartbeat | 🚧 (`events.jsonl` records every tick, failure, halt and resume; notifications and a heartbeat are next) |
+| Observability — per-cycle events, notifications, heartbeat | 🚧 (`events.jsonl` records every tick, failure, halt and resume; Discord carries every session, halt, gap and backtest out to a channel — see [docs/claude-e-discord.md](docs/claude-e-discord.md); a heartbeat is next) |
 | Research lab — backtest candidate strategies/allocators alongside the live fund | ⬜ |
 | Strategy generator — composes candidate strategies from the building blocks (analysts × policies × parameters), driven by the fund's mandate | ⬜ |
 | Auto-promotion — winners graduate into the live fund through the validation gate (CPCV/PBO), human-approved by default (depends: research lab, validation gate) | ⬜ |
