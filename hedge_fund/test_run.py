@@ -266,3 +266,157 @@ def test_paper_minute_fund_ticks_and_runs_like_a_daily_one(tmp_path, monkeypatch
     monkeypatch.setattr(run, "stop_runner", lambda directory: True)
     _main(monkeypatch, "paper", "stop", "fast")
     assert "asked to stop" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Reporting to Discord
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def channel(monkeypatch):
+    """A configured webhook whose posts are captured instead of sent.
+
+    `requests` is replaced inside the transport module, which is where the
+    webhook reads it — so the whole path from the CLI down to the payload is
+    the real one.
+    """
+    from types import SimpleNamespace
+
+    import requests
+
+    from hedge_fund.notify import discord as discord_module
+
+    posts: list[dict] = []
+
+    class FakeRequests:
+        RequestException = requests.RequestException
+
+        @staticmethod
+        def post(url, json=None, timeout=None):
+            posts.append({"url": url, "payload": json})
+            return SimpleNamespace(status_code=204, headers={}, text="",
+                                   json=lambda: {})
+
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/42/token")
+    monkeypatch.setattr(discord_module, "requests", FakeRequests)
+    return posts
+
+
+def _titles(posts):
+    return [post["payload"]["embeds"][0]["title"] for post in posts]
+
+
+def test_a_tick_posts_the_session_to_the_channel(tmp_path, monkeypatch, capsys, offline, channel):
+    set_today = offline
+    path = _mandate(tmp_path)
+    set_today("2025-01-07")
+    _main(monkeypatch, "paper", "create", "alpha", "--mandate", str(path), "--universe", "AAPL,MSFT")
+    assert channel == []  # deploying is not a session
+
+    _main(monkeypatch, "paper", "tick", "alpha")
+    capsys.readouterr()
+
+    assert _titles(channel) == ["alpha · 2025-01-06"]
+    fields = channel[0]["payload"]["embeds"][0]["fields"]
+    assert any(f["name"] == "NAV" and "$100,000.00" in f["value"] for f in fields)
+    assert any(f["name"].startswith("Decided") for f in fields)
+
+
+def test_no_discord_silences_one_run(tmp_path, monkeypatch, capsys, offline, channel):
+    set_today = offline
+    path = _mandate(tmp_path)
+    set_today("2025-01-07")
+    _main(monkeypatch, "paper", "create", "alpha", "--mandate", str(path), "--universe", "AAPL")
+    _main(monkeypatch, "--no-discord", "paper", "tick", "alpha")
+    capsys.readouterr()
+
+    assert channel == []
+
+
+def test_halting_and_resuming_are_announced(tmp_path, monkeypatch, capsys, offline, channel):
+    set_today = offline
+    path = _mandate(tmp_path)
+    set_today("2025-01-07")
+    _main(monkeypatch, "paper", "create", "alpha", "--mandate", str(path), "--universe", "AAPL")
+    channel.clear()
+
+    _main(monkeypatch, "paper", "halt", "alpha", "--reason", "the feed is lying about SPY")
+    _main(monkeypatch, "paper", "resume", "alpha")
+    capsys.readouterr()
+
+    assert _titles(channel) == ["alpha · HALTED", "alpha · resumed"]
+    assert "feed is lying" in channel[0]["payload"]["embeds"][0]["description"]
+
+
+def test_a_backtest_posts_its_result(tmp_path, monkeypatch, capsys, offline, channel):
+    path = _mandate(tmp_path)
+    _main(monkeypatch, "backtest", str(path), "--universe", "AAPL,MSFT",
+          "--start", "2025-01-06", "--end", "2025-01-13")
+    capsys.readouterr()
+
+    assert len(channel) == 1
+    embed = channel[0]["payload"]["embeds"][0]
+    assert embed["title"].startswith("mixed · backtest 2025-01-06 → 2025-01-13")
+    assert any(f["name"] == "Sharpe" for f in embed["fields"])
+
+
+def test_alerts_can_go_to_their_own_channel(tmp_path, monkeypatch, capsys, offline, channel):
+    monkeypatch.setenv("DISCORD_ALERT_WEBHOOK_URL", "https://discord.com/api/webhooks/99/other")
+    set_today = offline
+    path = _mandate(tmp_path)
+    set_today("2025-01-07")
+    _main(monkeypatch, "paper", "create", "alpha", "--mandate", str(path), "--universe", "AAPL")
+    _main(monkeypatch, "paper", "tick", "alpha")
+    _main(monkeypatch, "paper", "halt", "alpha", "--reason", "review")
+    capsys.readouterr()
+
+    sessions_to, alerts_to = channel[0]["url"], channel[1]["url"]
+    assert sessions_to.endswith("/42/token")
+    assert alerts_to.endswith("/99/other")
+
+
+def test_only_the_wanted_channels_are_posted_to(tmp_path, monkeypatch, capsys, offline, channel):
+    monkeypatch.setenv("DISCORD_NOTIFY", "alerts")
+    set_today = offline
+    path = _mandate(tmp_path)
+    set_today("2025-01-07")
+    _main(monkeypatch, "paper", "create", "alpha", "--mandate", str(path), "--universe", "AAPL")
+    _main(monkeypatch, "paper", "tick", "alpha")
+    capsys.readouterr()
+
+    assert channel == []  # sessions are off; a halt would still be posted
+
+
+def test_a_malformed_webhook_stops_the_command(tmp_path, monkeypatch, capsys, offline):
+    """Loud, and before anything runs: a fund told to report that silently
+    cannot is worse than one that refuses to start."""
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://example.com/api/webhooks/1/t")
+    path = _mandate(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        _main(monkeypatch, "backtest", str(path), "--universe", "AAPL",
+              "--start", "2025-01-06", "--end", "2025-01-13")
+
+    assert exc.value.code == 1
+    assert "DISCORD_WEBHOOK_URL" in capsys.readouterr().err
+
+
+def test_discord_test_without_a_webhook_says_what_to_set(monkeypatch, capsys):
+    monkeypatch.setattr(run, "apply_credentials", lambda: None)
+    monkeypatch.setattr(run, "ensure_mandates_dir", lambda: None)
+
+    with pytest.raises(SystemExit) as exc:
+        _main(monkeypatch, "discord", "test")
+
+    assert exc.value.code == 1
+    assert "DISCORD_WEBHOOK_URL is not set" in capsys.readouterr().err
+
+
+def test_discord_test_posts_one_message(monkeypatch, capsys, channel):
+    monkeypatch.setattr(run, "apply_credentials", lambda: None)
+    monkeypatch.setattr(run, "ensure_mandates_dir", lambda: None)
+
+    _main(monkeypatch, "discord", "test")
+
+    assert _titles(channel) == ["aihf"]
+    assert "posted" in capsys.readouterr().err
