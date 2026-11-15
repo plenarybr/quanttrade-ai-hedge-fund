@@ -17,6 +17,7 @@ from rich.text import Text
 
 from hedge_fund.data.bars import is_intraday
 from hedge_fund.fund import FundSpec, PortfolioMode, StrategySpec
+from hedge_fund.llm import DEFAULT_MODEL, load_api_models
 from hedge_fund.signals import ALPHA_MODEL_REGISTRY, get_investment_approach, LLMAgent
 
 try:
@@ -64,7 +65,13 @@ def horizon_label(days: int) -> str:
 # reads HEDGE_FUND_LLM_MODEL (hedge_fund/llm/client.py) and routes to the right provider, so
 # setting that env var steers every agent instance — the warm roster AND the
 # Fund — with no threading. Quant models (PEAD) carry no LLM and ignore it.
-DEFAULT_MODEL_LABEL = "Opus 5.5"
+# Derived, not repeated: the default lives in hedge_fund/llm/client.py, and a
+# label that disagreed with it would show one model while the agents used
+# another. Today that is the account's own Claude, which needs no API key.
+DEFAULT_MODEL_LABEL = next(
+    (label for label, model_id, _ in load_api_models() if model_id == DEFAULT_MODEL),
+    DEFAULT_MODEL,
+)
 
 DEFAULT_RISK = {"max_position_pct": 0.25, "max_gross_exposure": 1.0,
                 "halve_drawdown_pct": 0.10, "max_drawdown_pct": 0.20}

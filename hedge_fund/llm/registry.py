@@ -27,12 +27,23 @@ PROVIDER_ENV_VARS = {
     "TypeSafe": "TYPESAFE_API_KEY",
 }
 
+# The provider that has no key to set: the local `claude` CLI answers on the
+# account that is signed in to it (a subscription, or CLAUDE_CODE_OAUTH_TOKEN
+# on a server). It is a provider like any other to everything above this
+# module — it simply never appears in a "set your key" flow.
+CLAUDE_CODE = "Claude Code"
+KEYLESS_PROVIDERS = frozenset({CLAUDE_CODE})
+
+# Model ids served by the CLI are namespaced, so nothing can confuse
+# `claude-code:opus` (the subscription) with `claude-opus-5-5` (the API).
+CLI_MODEL_PREFIX = "claude-code:"
+
 # Providers v2 has a client for (see client.py:make_llm). Anything in the
 # registry but missing here is shown in the picker and not selectable — better
 # a greyed row than a run that dies on an id the transport rejects.
-SUPPORTED_PROVIDERS = frozenset(PROVIDER_ENV_VARS)
+SUPPORTED_PROVIDERS = frozenset(PROVIDER_ENV_VARS) | KEYLESS_PROVIDERS
 
-_FALLBACK = ("Opus 5.5", "claude-opus-5-5", "Anthropic")
+_FALLBACK = ("Claude (your account)", "claude-code:opus", CLAUDE_CODE)
 
 
 def load_api_models() -> list[tuple[str, str, str]]:
@@ -52,14 +63,30 @@ def load_api_models() -> list[tuple[str, str, str]]:
 
 def provider_for(model_id: str) -> str | None:
     """Which provider serves a model id. None if it is not in the registry —
-    a hand-exported HEDGE_FUND_LLM_MODEL should not be second-guessed."""
-    return next((prov for _, mid, prov in load_api_models() if mid == model_id),
-                None)
+    a hand-exported HEDGE_FUND_LLM_MODEL should not be second-guessed.
+
+    The one exception is the `claude-code:` namespace: the CLI takes any
+    alias or model name after the colon, so `claude-code:<anything>` routes
+    to the CLI whether or not the registry lists it. That is the point of a
+    namespace — a model newer than this file should not need a code change.
+    """
+    listed = next((prov for _, mid, prov in load_api_models() if mid == model_id),
+                  None)
+    if listed is not None:
+        return listed
+    return CLAUDE_CODE if model_id.startswith(CLI_MODEL_PREFIX) else None
 
 
 def env_var_for(provider: str) -> str | None:
-    """The environment variable a provider's key is read from."""
+    """The environment variable a provider's key is read from, or None when
+    the provider has no key to set (see KEYLESS_PROVIDERS)."""
     return PROVIDER_ENV_VARS.get(provider)
+
+
+def needs_key(provider: str) -> bool:
+    """Whether this provider is reached with a key at all. False for the CLI,
+    which carries the account's own session instead."""
+    return provider not in KEYLESS_PROVIDERS
 
 
 def is_supported(provider: str) -> bool:
